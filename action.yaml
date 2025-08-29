@@ -1,0 +1,240 @@
+name: "Slack Actions Notify"
+description: "Rich Slack notifications for GitHub Actions with timestamps, duration tracking, and thread updates"
+
+branding:
+  icon: "message-circle"
+  color: "green"
+
+inputs:
+  slack_channel:
+    description: "Slack channel ID where notifications will be sent (e.g., C1234567890)"
+    required: true
+  slack_token:
+    description: "Slack bot token with chat:write permissions (starts with xoxb-)"
+    required: true
+  mode:
+    description: "Notification mode: 'start' for initial notification or 'update' for final status"
+    required: false
+    default: "update"
+  status:
+    description: "Workflow status override (auto-detected from job.status if not provided)"
+    required: false
+  slack_ts:
+    description: "Slack message timestamp for thread updates (use output from 'start' mode)"
+    required: false
+  start_time:
+    description: "Workflow start timestamp for duration calculation (use output from 'start' mode)"
+    required: false
+  timezone:
+    description: "Timezone for timestamp display (e.g., 'Asia/Kolkata', 'America/New_York'). Defaults to UTC if invalid"
+    required: false
+    default: "UTC"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Auto-generate metadata
+      id: auto-meta
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Validate and set timezone
+        timezone="${{ inputs.timezone }}"
+        if [[ -z "$timezone" ]]; then
+          timezone="UTC"
+        fi
+        
+        # Test if timezone is valid, fallback to UTC if invalid
+        if ! TZ="$timezone" date >/dev/null 2>&1; then
+          echo "Warning: Invalid timezone '$timezone', falling back to UTC"
+          timezone="UTC"
+        fi
+        
+        echo "timezone=$timezone" >> $GITHUB_OUTPUT
+
+        # Timestamp in specified timezone
+        if [[ "$timezone" == "UTC" ]]; then
+          current_timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        else
+          current_timestamp=$(TZ="$timezone" date +"%Y-%m-%d %H:%M:%S %Z")
+        fi
+        echo "timestamp=$current_timestamp" >> $GITHUB_OUTPUT
+
+        # Auto-generate short SHA
+        echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+
+        # Duration (only in update mode)
+        if [[ "${{ inputs.mode }}" == "update" && -n "${{ inputs.start_time }}" ]]; then
+          start_epoch=$(date -d "${{ inputs.start_time }}" +%s 2>/dev/null || echo "0")
+          current_epoch=$(date -u +%s)
+          duration=$((current_epoch - start_epoch))
+
+          # Format duration (cleaner: skip empty units)
+          if [[ $duration -ge 3600 ]]; then
+            hours=$((duration / 3600))
+            minutes=$(((duration % 3600) / 60))
+            seconds=$((duration % 60))
+            formatted="${hours}h"
+            [[ $minutes -gt 0 ]] && formatted+=" ${minutes}m"
+            [[ $seconds -gt 0 ]] && formatted+=" ${seconds}s"
+          elif [[ $duration -ge 60 ]]; then
+            minutes=$((duration / 60))
+            seconds=$((duration % 60))
+            formatted="${minutes}m"
+            [[ $seconds -gt 0 ]] && formatted+=" ${seconds}s"
+          else
+            formatted="${duration}s"
+          fi
+          echo "duration=$formatted" >> $GITHUB_OUTPUT
+          echo "duration_seconds=$duration" >> $GITHUB_OUTPUT
+
+          # Start time formatted in specified timezone
+          if [[ "$timezone" == "UTC" ]]; then
+            formatted_start_time=$(date -u -d "${{ inputs.start_time }}" +"%-H:%M %d-%m-%Y UTC" 2>/dev/null || echo "N/A")
+          else
+            formatted_start_time=$(TZ="$timezone" date -d "${{ inputs.start_time }}" +"%-H:%M %d-%m-%Y %Z" 2>/dev/null || echo "N/A")
+          fi
+          echo "formatted_start_time=$formatted_start_time" >> $GITHUB_OUTPUT
+        else
+          echo "duration=" >> $GITHUB_OUTPUT
+          echo "duration_seconds=0" >> $GITHUB_OUTPUT
+          echo "start_timestamp=$current_timestamp" >> $GITHUB_OUTPUT
+          echo "formatted_start_time=" >> $GITHUB_OUTPUT
+        fi
+
+        # Auto-detect status
+        if [[ -z "${{ inputs.status }}" ]]; then
+          case "${{ job.status }}" in
+            success) echo "detected_status=success" >> $GITHUB_OUTPUT ;;
+            failure) echo "detected_status=failure" >> $GITHUB_OUTPUT ;;
+            cancelled) echo "detected_status=cancelled" >> $GITHUB_OUTPUT ;;
+            *) echo "detected_status=success" >> $GITHUB_OUTPUT ;;
+          esac
+        else
+          echo "detected_status=${{ inputs.status }}" >> $GITHUB_OUTPUT
+        fi
+
+        # Commit message with robust fallback
+        commit_msg="${{ github.event.head_commit.message || github.event.pull_request.title || '' }}"
+        if [[ -z "$commit_msg" ]]; then
+          # Try git log as fallback, but ensure we're in a git repo
+          if git rev-parse --git-dir >/dev/null 2>&1; then
+            commit_msg=$(git log -1 --pretty=%B 2>/dev/null | head -1 || echo "N/A")
+          else
+            commit_msg="N/A"
+          fi
+        fi
+        # Clean up commit message (remove extra whitespace, limit length)
+        commit_msg=$(echo "$commit_msg" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cut -c1-200)
+        [[ -z "$commit_msg" ]] && commit_msg="N/A"
+        echo "commit_message=$commit_msg" >> $GITHUB_OUTPUT
+
+    - name: Define status metadata
+      id: status-meta
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${{ inputs.mode }}" == "start" ]]; then
+          echo "color=dbab09" >> $GITHUB_OUTPUT
+          echo "status_emoji=:hourglass_flowing_sand:" >> $GITHUB_OUTPUT
+          echo "status_text=Workflow Started" >> $GITHUB_OUTPUT
+        else
+          case "${{ steps.auto-meta.outputs.detected_status }}" in
+            success)
+              echo "color=36a64f" >> $GITHUB_OUTPUT
+              echo "status_emoji=:white_check_mark:" >> $GITHUB_OUTPUT
+              echo "status_text=Workflow Succeeded" >> $GITHUB_OUTPUT
+              ;;
+            failure)
+              echo "color=ff0000" >> $GITHUB_OUTPUT
+              echo "status_emoji=:x:" >> $GITHUB_OUTPUT
+              echo "status_text=Workflow Failed" >> $GITHUB_OUTPUT
+              ;;
+            cancelled)
+              echo "color=aaaaaa" >> $GITHUB_OUTPUT
+              echo "status_emoji=:warning:" >> $GITHUB_OUTPUT
+              echo "status_text=Workflow Cancelled" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "Unknown status: ${{ inputs.status }}"
+              exit 1
+              ;;
+          esac
+        fi
+
+    - name: Send Slack notification
+      id: slack-message
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        method: ${{ inputs.mode == 'start' && 'chat.postMessage' || 'chat.update' }}
+        token: ${{ inputs.slack_token }}
+        payload: |
+          {
+            "ts": "${{ inputs.slack_ts }}",
+            "channel": "${{ inputs.slack_channel }}",
+            "text": "*${{ github.repository }}/${{ github.workflow }}* — ${{ steps.status-meta.outputs.status_text }} at *${{ steps.auto-meta.outputs.timestamp }}*",
+            "attachments": [
+              {
+                "color": "${{ steps.status-meta.outputs.color }}",
+                "fields": [
+                  {
+                    "title": "Triggered By",
+                    "value": "<https://github.com/${{ github.actor }}|${{ github.actor }}>",
+                    "short": true
+                  },
+                  {
+                    "title": "Event Type", 
+                    "value": "<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.event_name }}>",
+                    "short": true
+                  },
+                  {
+                    "title": "Branch",
+                    "value": "<https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}|${{ github.ref_name }}>",
+                    "short": true
+                  },
+                  {
+                    "title": "Commit",
+                    "value": "<https://github.com/${{ github.repository }}/commit/${{ steps.auto-meta.outputs.short_sha }}|${{ steps.auto-meta.outputs.short_sha }}>",
+                    "short": true
+                  },
+                  {
+                    "title": "Workflow",
+                    "value": "<https://github.com/${{ github.repository }}/actions?workflow=${{ github.workflow }}|${{ github.workflow }}>",
+                    "short": true
+                  },
+                  {
+                    "title": "Run Number",
+                    "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>",
+                    "short": true
+                  }${{ inputs.mode == 'update' && steps.auto-meta.outputs.duration != '' && format(',
+                  {{
+                    "title": "Execution Time",
+                    "value": "{0}",
+                    "short": true
+                  }}', steps.auto-meta.outputs.duration) || '' }}${{ inputs.mode == 'update' && steps.auto-meta.outputs.formatted_start_time != '' && format(',
+                  {{
+                    "title": "Started At",
+                    "value": "{0}",
+                    "short": true
+                  }}', steps.auto-meta.outputs.formatted_start_time) || '' }},
+                  {
+                    "title": "Commit Message",
+                    "value": "${{ steps.auto-meta.outputs.commit_message }}",
+                    "short": false
+                  }
+                ],
+                "footer": "GitHub Actions Bot${{ inputs.mode == 'update' && steps.auto-meta.outputs.formatted_start_time != '' && format(' • Started: {0}', steps.auto-meta.outputs.formatted_start_time) || '' }}",
+                "footer_icon": "https://github.com/favicon.ico",
+                "ts": ${{ github.event.repository.pushed_at || github.event.repository.updated_at }}
+              }
+            ]
+          }
+
+outputs:
+  ts:
+    description: "Slack message timestamp - use this for slack_ts in update mode to create thread updates"
+    value: ${{ steps.slack-message.outputs.ts }}
+  start_timestamp:
+    description: "Workflow start timestamp - use this for start_time in update mode to calculate duration"
+    value: ${{ steps.auto-meta.outputs.start_timestamp }}
