@@ -130,6 +130,32 @@ runs:
         [[ -z "$commit_msg" ]] && commit_msg="N/A"
         echo "commit_message=$commit_msg" >> $GITHUB_OUTPUT
 
+        # Generate reliable Unix timestamp for Slack 'ts' field
+        # Try multiple sources, fallback to current time if all fail
+        unix_ts=""
+        
+        # Try PR created timestamp
+        if [[ -n "${{ github.event.pull_request.created_at || '' }}" ]]; then
+          unix_ts=$(date -d "${{ github.event.pull_request.created_at }}" +%s 2>/dev/null || echo "")
+        fi
+        
+        # Try commit timestamp  
+        if [[ -z "$unix_ts" && -n "${{ github.event.head_commit.timestamp || '' }}" ]]; then
+          unix_ts=$(date -d "${{ github.event.head_commit.timestamp }}" +%s 2>/dev/null || echo "")
+        fi
+        
+        # Try workflow run started timestamp
+        if [[ -z "$unix_ts" && -n "${{ github.run_started_at || '' }}" ]]; then
+          unix_ts=$(date -d "${{ github.run_started_at }}" +%s 2>/dev/null || echo "")
+        fi
+        
+        # Final fallback: current time
+        if [[ -z "$unix_ts" ]]; then
+          unix_ts=$(date +%s)
+        fi
+        
+        echo "unix_timestamp=$unix_ts" >> $GITHUB_OUTPUT
+
     - name: Define status metadata
       id: status-meta
       shell: bash
@@ -224,8 +250,9 @@ runs:
                     "short": false
                   }
                 ],
-                "footer": "GitHub Actions Bot • ${{ steps.auto-meta.outputs.timestamp }}",
-                "footer_icon": "https://github.com/favicon.ico"
+                "footer": "GitHub Actions Bot",
+                "footer_icon": "https://github.com/favicon.ico",
+                "ts": ${{ steps.auto-meta.outputs.unix_timestamp }}
               }
             ]
           }
