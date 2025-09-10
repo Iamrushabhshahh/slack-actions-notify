@@ -224,7 +224,7 @@ runs:
                     "short": false
                   }
                 ],
-                "footer": "GitHub Actions Bot${{ inputs.mode == 'update' && steps.auto-meta.outputs.formatted_start_time != '' && format(' • Started: {0}', steps.auto-meta.outputs.formatted_start_time) || '' }}",
+                "footer": "GitHub Actions Bot • ${{ steps.auto-meta.outputs.timestamp }}",
                 "footer_icon": "https://github.com/favicon.ico",
                 "ts": ${{ github.event.pull_request.created_at || github.event.head_commit.timestamp || github.run_started_at || github.event.repository.updated_at }}
               }
