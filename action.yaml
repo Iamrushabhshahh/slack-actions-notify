@@ -161,26 +161,36 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # Context-aware status text based on event type
+        event_context=""
+        case "${{ github.event_name }}" in
+          pull_request) event_context="PR Workflow" ;;
+          push) event_context="Push Workflow" ;;
+          workflow_dispatch) event_context="Manual Workflow" ;;
+          schedule) event_context="Scheduled Workflow" ;;
+          *) event_context="Workflow" ;;
+        esac
+
         if [[ "${{ inputs.mode }}" == "start" ]]; then
           echo "color=dbab09" >> $GITHUB_OUTPUT
           echo "status_emoji=:hourglass_flowing_sand:" >> $GITHUB_OUTPUT
-          echo "status_text=Workflow Started" >> $GITHUB_OUTPUT
+          echo "status_text=${event_context} Started" >> $GITHUB_OUTPUT
         else
           case "${{ steps.auto-meta.outputs.detected_status }}" in
             success)
               echo "color=36a64f" >> $GITHUB_OUTPUT
               echo "status_emoji=:white_check_mark:" >> $GITHUB_OUTPUT
-              echo "status_text=Workflow Succeeded" >> $GITHUB_OUTPUT
+              echo "status_text=${event_context} Succeeded" >> $GITHUB_OUTPUT
               ;;
             failure)
               echo "color=ff0000" >> $GITHUB_OUTPUT
               echo "status_emoji=:x:" >> $GITHUB_OUTPUT
-              echo "status_text=Workflow Failed" >> $GITHUB_OUTPUT
+              echo "status_text=${event_context} Failed" >> $GITHUB_OUTPUT
               ;;
             cancelled)
               echo "color=aaaaaa" >> $GITHUB_OUTPUT
               echo "status_emoji=:warning:" >> $GITHUB_OUTPUT
-              echo "status_text=Workflow Cancelled" >> $GITHUB_OUTPUT
+              echo "status_text=${event_context} Cancelled" >> $GITHUB_OUTPUT
               ;;
             *)
               echo "Unknown status: ${{ inputs.status }}"
@@ -211,7 +221,7 @@ runs:
                   },
                   {
                     "title": "Event Type", 
-                    "value": "<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.event_name }}>",
+                    "value": "<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.event_name == 'pull_request' && 'Pull Request' || github.event_name == 'push' && 'Code Push' || github.event_name == 'workflow_dispatch' && 'Manual Trigger' || github.event_name == 'schedule' && 'Scheduled Run' || github.event_name }}>",
                     "short": true
                   },
                   {
@@ -243,7 +253,17 @@ runs:
                     "title": "Started At",
                     "value": "{0}",
                     "short": true
-                  }}', steps.auto-meta.outputs.formatted_start_time) || '' }},
+                  }}', steps.auto-meta.outputs.formatted_start_time) || '' }}${{ github.event_name == 'pull_request' && format(',
+                  {{
+                    "title": "Target Branch",
+                    "value": "<https://github.com/{0}/tree/{1}|{1}>",
+                    "short": true
+                  }},
+                  {{
+                    "title": "PR Title", 
+                    "value": "{2}",
+                    "short": true
+                  }}', github.repository, github.event.pull_request.base.ref, github.event.pull_request.title) || '' }},
                   {
                     "title": "Commit Message",
                     "value": "${{ steps.auto-meta.outputs.commit_message }}",
