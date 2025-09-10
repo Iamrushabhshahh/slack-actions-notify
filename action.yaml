@@ -225,8 +225,7 @@ runs:
                   }
                 ],
                 "footer": "GitHub Actions Bot • ${{ steps.auto-meta.outputs.timestamp }}",
-                "footer_icon": "https://github.com/favicon.ico",
-                "ts": ${{ github.event.pull_request.created_at || github.event.head_commit.timestamp || github.run_started_at || github.event.repository.updated_at }}
+                "footer_icon": "https://github.com/favicon.ico"
               }
             ]
           }
