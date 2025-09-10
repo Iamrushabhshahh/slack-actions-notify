@@ -215,8 +215,8 @@ runs:
                     "short": true
                   },
                   {
-                    "title": "Branch",
-                    "value": "<https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}|${{ github.ref_name }}>",
+                    "title": "${{ github.event_name == 'pull_request' && 'Pull Request' || 'Branch' }}",
+                    "value": "${{ github.event_name == 'pull_request' && format('<https://github.com/{0}/pull/{1}|#{1}>', github.repository, github.event.pull_request.number) || format('<https://github.com/{0}/tree/{1}|{1}>', github.repository, github.ref_name) }}",
                     "short": true
                   },
                   {
