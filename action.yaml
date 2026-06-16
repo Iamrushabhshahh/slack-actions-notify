@@ -1,5 +1,5 @@
 name: "Slack Actions Notify"
-description: "Rich Slack notifications for GitHub Actions — start/update threading, duration tracking, custom messages, webhook & token auth"
+description: "Rich Slack notifications for GitHub Actions with threading, duration tracking, and custom messages."
 
 branding:
   icon: "message-circle"
