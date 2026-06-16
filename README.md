@@ -1,290 +1,223 @@
-# Slack Status Notifier
+# slack-actions-notify
 
 [![GitHub marketplace](https://img.shields.io/badge/marketplace-slack--actions--notify-blue?logo=github)](https://github.com/marketplace/actions/slack-actions-notify)
 [![GitHub release](https://img.shields.io/github/v/release/Iamrushabhshahh/slack-actions-notify)](https://github.com/Iamrushabhshahh/slack-actions-notify/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Send rich Slack notifications for GitHub Actions workflow status updates with timestamps, duration tracking, and detailed metadata.
+A GitHub Action for Slack notifications that does the one thing most others don't — it edits the same message instead of spamming a new one. Post a "workflow started" message, then update it in-place when the workflow finishes with status, duration, and a link back to the run.
 
-## ✨ Features
+Also works as a simple one-shot notifier if you don't need threading.
 
-- 🚀 **Rich notifications** with workflow details, commit info, and execution metadata
-- ⏱️ **Duration tracking** between workflow start and completion
-- 🌍 **Timezone support** for displaying timestamps in your preferred timezone
-- 🔄 **Thread updates** - start with initial notification, then update the same message with final status
-- 📊 **Comprehensive metadata** including commit message, branch, triggered by, and more
-- 🎨 **Status-based styling** with appropriate colors and emojis for success, failure, and cancelled workflows
-- 🔗 **Direct links** to GitHub workflow runs, commits, branches, and user profiles
+---
 
-## 🚀 Quick Start
+## How the threading works
 
-### Basic Usage
+Most Slack notify actions post two separate messages (start + result). This one posts one message and edits it. Your Slack channel stays clean.
 
-```yaml
-name: CI/CD Pipeline
-on: [push, pull_request]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      # Your build steps here
-      - name: Build and test
-        run: |
-          npm install
-          npm test
-          npm run build
-      
-      # Notify on completion
-      - name: Notify Slack
-        if: always()
-        uses: Iamrushabhshahh/slack-actions-notify@v1
-        with:
-          slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
-          slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
+```
+[🟡 Push Workflow Started]      ← posted by mode: start
+        ↓ workflow runs...
+[✅ Push Workflow Succeeded]    ← same message, updated by mode: update
+   Duration: 2m 14s
+   Started: 10:32 16-06-2026
 ```
 
-### Advanced Usage with Thread Updates
+---
+
+## Quickstart
+
+**Just want a notification when your workflow finishes:**
 
 ```yaml
-name: Advanced CI/CD with Thread Updates
-on: [push, pull_request]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      # Send initial notification
-      - name: Notify Slack - Start
-        id: slack-start
-        uses: Iamrushabhshahh/slack-actions-notify@v1
-        with:
-          slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
-          slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-          mode: start
-          timezone: 'America/New_York'
-      
-      # Your build steps
-      - name: Build and test
-        run: |
-          npm install
-          npm test
-          npm run build
-      
-      # Update the same message with final status
-      - name: Notify Slack - Complete
-        if: always()
-        uses: Iamrushabhshahh/slack-actions-notify@v1
-        with:
-          slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
-          slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-          mode: update
-          slack_ts: ${{ steps.slack-start.outputs.ts }}
-          start_time: ${{ steps.slack-start.outputs.start_timestamp }}
-          timezone: 'America/New_York'
-```
-
-## 📖 Inputs
-
-| Input | Description | Required | Default |
-|-------|-------------|----------|---------|
-| `slack_channel` | Slack channel ID where notifications will be sent | ✅ Yes | |
-| `slack_token` | Slack bot token with `chat:write` permissions | ✅ Yes | |
-| `mode` | Notification mode: `start` (initial) or `update` (final) | ❌ No | `update` |
-| `status` | Workflow status (auto-detected if not provided) | ❌ No | Auto-detected |
-| `slack_ts` | Slack thread timestamp (required for updates) | ❌ No | |
-| `start_time` | Workflow start timestamp (for duration calculation) | ❌ No | |
-| `timezone` | Timezone for timestamp display (e.g., 'Asia/Kolkata', 'America/New_York') | ❌ No | `UTC` |
-
-## 📤 Outputs
-
-| Output | Description |
-|--------|-------------|
-| `ts` | Slack message timestamp for thread updates |
-| `start_timestamp` | Workflow start timestamp for duration calculation |
-
-## 🔧 Setup
-
-### 1. Create a Slack App
-
-1. Go to [Slack API](https://api.slack.com/apps) and create a new app
-2. Add the following OAuth scopes in **OAuth & Permissions**:
-   - `chat:write`
-   - `chat:write.public` (if posting to public channels)
-3. Install the app to your workspace
-4. Copy the **Bot User OAuth Token** (starts with `xoxb-`)
-
-### 2. Get Channel ID
-
-1. Open Slack in your browser
-2. Navigate to the desired channel
-3. Copy the channel ID from the URL (e.g., `C1234567890`)
-
-### 3. Configure GitHub Secrets
-
-Add these secrets to your repository (**Settings** → **Secrets and variables** → **Actions**):
-
-- `SLACK_BOT_TOKEN`: Your Slack bot token
-- `SLACK_CHANNEL_ID`: Your Slack channel ID
-
-## 🌍 Timezone Support
-
-The action supports any valid timezone identifier. Examples:
-
-- `UTC` (default)
-- `America/New_York`
-- `Europe/London`
-- `Asia/Kolkata`
-- `Pacific/Auckland`
-
-Invalid timezones will automatically fall back to UTC with a warning.
-
-## 📱 Notification Preview
-
-The action sends rich notifications that include:
-
-**Initial notification (mode: start):**
-- 🟡 Yellow indicator for "in progress"
-- Workflow start timestamp
-- Basic metadata (branch, commit, triggered by)
-
-**Final notification (mode: update):**
-- 🟢 Green for success / 🔴 Red for failure / ⚪ Gray for cancelled
-- Execution duration
-- Complete metadata including commit message
-- Links to GitHub resources
-
-## 🔄 Workflow Modes
-
-### Start Mode
-Use `mode: start` to send an initial notification when your workflow begins:
-```yaml
-- uses: yourusername/slack-actions-notify@v1
-  with:
-    mode: start
-    # ... other inputs
-```
-
-### Update Mode (Default)
-Use `mode: update` (or omit the mode) for final status notifications:
-```yaml
-- uses: yourusername/slack-actions-notify@v1
-  with:
-    mode: update
-    slack_ts: ${{ steps.slack-start.outputs.ts }}
-    start_time: ${{ steps.slack-start.outputs.start_timestamp }}
-    # ... other inputs
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-If you encounter any issues or have questions:
-
-1. Check the [Issues](https://github.com/Iamrushabhshahh/slack-actions-notify/issues) page
-2. Create a new issue with detailed information
-3. Include your workflow configuration and any error messages
-
-## 🏷️ Examples by Use Case
-
-### Simple Success/Failure Notifications
-```yaml
-- name: Notify on completion
-  if: always()  # Runs regardless of workflow outcome
-  uses: yourusername/slack-actions-notify@v1
+- name: Notify Slack
+  if: always()
+  uses: Iamrushabhshahh/slack-actions-notify@v1
   with:
     slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
     slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
 ```
 
-### Conditional Notifications
+**Start → update pattern (recommended for CI/CD):**
 
-#### Only Notify on Failures
-```yaml
-- name: Alert on Failure
-  if: failure()
-  uses: yourusername/slack-actions-notify@v1
-  with:
-    slack_channel: ${{ secrets.SLACK_ALERT_CHANNEL }}
-    slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-```
-
-#### Production Branch Only
-```yaml
-- name: Production Deploy Notification
-  if: github.ref == 'refs/heads/main'
-  uses: yourusername/slack-actions-notify@v1
-  with:
-    slack_channel: ${{ secrets.SLACK_PROD_CHANNEL }}
-    slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-```
-
-#### Critical Failures (Main + Release Branches)
-```yaml
-- name: Critical Failure Alert
-  if: failure() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
-  uses: yourusername/slack-actions-notify@v1
-  with:
-    slack_channel: ${{ secrets.SLACK_CRITICAL_CHANNEL }}
-    slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-```
-
-### Deployment Notifications with Custom Timezone
-```yaml
-- name: Deployment Complete
-  uses: yourusername/slack-actions-notify@v1
-  with:
-    slack_channel: ${{ secrets.SLACK_DEPLOY_CHANNEL }}
-    slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-    timezone: 'Europe/London'
-```
-
-### Multi-Job Workflow with Thread Updates
 ```yaml
 jobs:
-  setup:
+  notify-start:
     runs-on: ubuntu-latest
     outputs:
-      slack_ts: ${{ steps.notify.outputs.ts }}
-      start_time: ${{ steps.notify.outputs.start_timestamp }}
+      ts: ${{ steps.notify.outputs.ts }}
+      start: ${{ steps.notify.outputs.start_timestamp }}
     steps:
-      - name: Start Notification
-        id: notify
+      - id: notify
         uses: Iamrushabhshahh/slack-actions-notify@v1
         with:
+          mode: start
           slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-          mode: start
+          timezone: Asia/Kolkata
 
   build:
-    needs: setup
+    needs: notify-start
     runs-on: ubuntu-latest
     steps:
-      # ... build steps ...
-      
-  deploy:
-    needs: [setup, build]
+      - run: npm ci && npm test
+
+  notify-done:
+    needs: [notify-start, build]
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      # ... deploy steps ...
-      - name: Final Notification
-        if: always()
-        uses: Iamrushabhshahh/slack-actions-notify@v1
+      - uses: Iamrushabhshahh/slack-actions-notify@v1
         with:
+          mode: update
+          slack_ts: ${{ needs.notify-start.outputs.ts }}
+          start_time: ${{ needs.notify-start.outputs.start }}
+          status: ${{ needs.build.result }}
           slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-          mode: update
-          slack_ts: ${{ needs.setup.outputs.slack_ts }}
-          start_time: ${{ needs.setup.outputs.start_time }}
+          timezone: Asia/Kolkata
 ```
+
+**Using a webhook instead of a bot token:**
+
+```yaml
+- uses: Iamrushabhshahh/slack-actions-notify@v1
+  with:
+    slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+    message: "Deployed to production"
+```
+
+Note: webhook mode doesn't support start→update threading. You'll need a bot token for that.
+
+---
+
+## Inputs
+
+### Auth
+
+| Input | Description |
+|-------|-------------|
+| `slack_token` | Bot token (`xoxb-…`). Needed for threading. Requires `slack_channel`. |
+| `slack_webhook_url` | Incoming webhook URL. Simpler, but no threading support. |
+
+You need one or the other. If you pass both, token takes precedence.
+
+### Core
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `slack_channel` | | Channel ID (e.g. `C1234567890`). Required with `slack_token`. |
+| `mode` | `update` | `start` to post a new message, `update` to edit the previous one. |
+| `slack_ts` | | The `ts` output from a `start` step. Required for `mode: update`. |
+| `start_time` | | The `start_timestamp` output from a `start` step. Used to compute duration. |
+| `status` | auto | Override the workflow status. Auto-detected from `job.status` if omitted. |
+| `timezone` | `UTC` | Any valid tz name — `Asia/Kolkata`, `America/New_York`, etc. Falls back to UTC. |
+
+### Content
+
+| Input | Description |
+|-------|-------------|
+| `title` | Custom notification title. Defaults to `repo/workflow — status`. |
+| `message` | Extra text shown below the fields. |
+| `message_on_success` | Overrides `message` when the workflow succeeds. |
+| `message_on_failure` | Overrides `message` when the workflow fails. |
+| `message_on_cancel` | Overrides `message` when the workflow is cancelled. |
+| `mention` | Prepend a Slack mention. Pass `here`, `channel`, a user ID (`U123456`), or `<@U123456>`. |
+| `minimal` | Set to `true` to strip the metadata fields and show only branch, commit, and duration. |
+
+### Appearance
+
+These only apply when posting a new message (`mode: start`). Editing an existing message can't change the bot's appearance.
+
+| Input | Description |
+|-------|-------------|
+| `username` | Custom bot display name. |
+| `icon_emoji` | Bot icon emoji, e.g. `:rocket:`. Overrides `icon_url`. |
+| `icon_url` | Bot icon URL. |
+
+---
+
+## Outputs
+
+| Output | Description |
+|--------|-------------|
+| `ts` | Slack message timestamp. Pass as `slack_ts` to the update step. |
+| `start_timestamp` | Workflow start time. Pass as `start_time` to the update step. |
+
+---
+
+## Setup
+
+**Slack side:**
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App → From Scratch
+2. Under *OAuth & Permissions*, add `chat:write` (and `chat:write.public` if you want to post to public channels without the bot being a member)
+3. Install to workspace, copy the Bot User OAuth Token (`xoxb-…`)
+4. Get your channel ID: open Slack in a browser, go to the channel, it's the last part of the URL
+
+**GitHub side:**
+
+Add to your repo secrets (*Settings → Secrets and variables → Actions*):
+- `SLACK_BOT_TOKEN`
+- `SLACK_CHANNEL_ID`
+
+---
+
+## A few examples
+
+**Alert on failure with @here mention:**
+
+```yaml
+- name: Alert on failure
+  if: failure()
+  uses: Iamrushabhshahh/slack-actions-notify@v1
+  with:
+    slack_channel: ${{ secrets.SLACK_ALERTS_CHANNEL }}
+    slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
+    mention: here
+    message_on_failure: "Build broke on ${{ github.ref_name }}. Someone take a look."
+```
+
+**Minimal notification for noisy repos:**
+
+```yaml
+- uses: Iamrushabhshahh/slack-actions-notify@v1
+  if: always()
+  with:
+    slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
+    slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
+    minimal: "true"
+```
+
+**Custom bot branding:**
+
+```yaml
+- uses: Iamrushabhshahh/slack-actions-notify@v1
+  with:
+    slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
+    slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
+    mode: start
+    username: deploy-bot
+    icon_emoji: ":ship:"
+    title: "Deploying to production..."
+```
+
+**Per-status messages:**
+
+```yaml
+- uses: Iamrushabhshahh/slack-actions-notify@v1
+  with:
+    slack_channel: ${{ secrets.SLACK_CHANNEL_ID }}
+    slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
+    mode: update
+    slack_ts: ${{ steps.start.outputs.ts }}
+    start_time: ${{ steps.start.outputs.start_timestamp }}
+    message_on_success: "Shipped. All good."
+    message_on_failure: "Something went wrong — check the run."
+    message_on_cancel: "Cancelled."
+```
+
+---
+
+## License
+
+MIT
