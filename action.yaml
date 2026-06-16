@@ -36,22 +36,31 @@ runs:
     - name: Auto-generate metadata
       id: auto-meta
       shell: bash
+      env:
+        # All user/caller-controlled values are passed via env to prevent shell injection.
+        # Never interpolate ${{ expr }} directly into the run: script body.
+        INPUT_TIMEZONE: ${{ inputs.timezone }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_START_TIME: ${{ inputs.start_time }}
+        INPUT_STATUS: ${{ inputs.status }}
+        HEAD_COMMIT_MSG: ${{ github.event.head_commit.message }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+        HEAD_COMMIT_TS: ${{ github.event.head_commit.timestamp }}
+        RUN_STARTED_AT: ${{ github.run_started_at }}
+        JOB_STATUS: ${{ job.status }}
       run: |
         set -euo pipefail
 
         # Validate and set timezone
-        timezone="${{ inputs.timezone }}"
-        if [[ -z "$timezone" ]]; then
-          timezone="UTC"
-        fi
-        
-        # Test if timezone is valid, fallback to UTC if invalid
+        timezone="${INPUT_TIMEZONE:-UTC}"
+        [[ -z "$timezone" ]] && timezone="UTC"
+
         if ! TZ="$timezone" date >/dev/null 2>&1; then
           echo "Warning: Invalid timezone '$timezone', falling back to UTC"
           timezone="UTC"
         fi
-        
-        echo "timezone=$timezone" >> $GITHUB_OUTPUT
+        echo "timezone=$timezone" >> "$GITHUB_OUTPUT"
 
         # Timestamp in specified timezone
         if [[ "$timezone" == "UTC" ]]; then
@@ -59,18 +68,17 @@ runs:
         else
           current_timestamp=$(TZ="$timezone" date +"%Y-%m-%d %H:%M:%S %Z")
         fi
-        echo "timestamp=$current_timestamp" >> $GITHUB_OUTPUT
+        echo "timestamp=$current_timestamp" >> "$GITHUB_OUTPUT"
 
         # Auto-generate short SHA
-        echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+        echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
         # Duration (only in update mode)
-        if [[ "${{ inputs.mode }}" == "update" && -n "${{ inputs.start_time }}" ]]; then
-          start_epoch=$(date -d "${{ inputs.start_time }}" +%s 2>/dev/null || echo "0")
+        if [[ "$INPUT_MODE" == "update" && -n "${INPUT_START_TIME:-}" ]]; then
+          start_epoch=$(date -d "$INPUT_START_TIME" +%s 2>/dev/null || echo "0")
           current_epoch=$(date -u +%s)
           duration=$((current_epoch - start_epoch))
 
-          # Format duration (cleaner: skip empty units)
           if [[ $duration -ge 3600 ]]; then
             hours=$((duration / 3600))
             minutes=$(((duration % 3600) / 60))
@@ -86,114 +94,120 @@ runs:
           else
             formatted="${duration}s"
           fi
-          echo "duration=$formatted" >> $GITHUB_OUTPUT
-          echo "duration_seconds=$duration" >> $GITHUB_OUTPUT
+          echo "duration=$formatted" >> "$GITHUB_OUTPUT"
+          echo "duration_seconds=$duration" >> "$GITHUB_OUTPUT"
 
-          # Start time formatted in specified timezone
           if [[ "$timezone" == "UTC" ]]; then
-            formatted_start_time=$(date -u -d "${{ inputs.start_time }}" +"%-H:%M %d-%m-%Y UTC" 2>/dev/null || echo "N/A")
+            formatted_start_time=$(date -u -d "$INPUT_START_TIME" +"%-H:%M %d-%m-%Y UTC" 2>/dev/null || echo "N/A")
           else
-            formatted_start_time=$(TZ="$timezone" date -d "${{ inputs.start_time }}" +"%-H:%M %d-%m-%Y %Z" 2>/dev/null || echo "N/A")
+            formatted_start_time=$(TZ="$timezone" date -d "$INPUT_START_TIME" +"%-H:%M %d-%m-%Y %Z" 2>/dev/null || echo "N/A")
           fi
-          echo "formatted_start_time=$formatted_start_time" >> $GITHUB_OUTPUT
+          echo "formatted_start_time=$formatted_start_time" >> "$GITHUB_OUTPUT"
         else
-          echo "duration=" >> $GITHUB_OUTPUT
-          echo "duration_seconds=0" >> $GITHUB_OUTPUT
-          echo "start_timestamp=$current_timestamp" >> $GITHUB_OUTPUT
-          echo "formatted_start_time=" >> $GITHUB_OUTPUT
+          echo "duration=" >> "$GITHUB_OUTPUT"
+          echo "duration_seconds=0" >> "$GITHUB_OUTPUT"
+          echo "start_timestamp=$current_timestamp" >> "$GITHUB_OUTPUT"
+          echo "formatted_start_time=" >> "$GITHUB_OUTPUT"
         fi
 
         # Auto-detect status
-        if [[ -z "${{ inputs.status }}" ]]; then
-          case "${{ job.status }}" in
-            success) echo "detected_status=success" >> $GITHUB_OUTPUT ;;
-            failure) echo "detected_status=failure" >> $GITHUB_OUTPUT ;;
-            cancelled) echo "detected_status=cancelled" >> $GITHUB_OUTPUT ;;
-            *) echo "detected_status=success" >> $GITHUB_OUTPUT ;;
+        if [[ -z "${INPUT_STATUS:-}" ]]; then
+          case "$JOB_STATUS" in
+            success)   echo "detected_status=success"   >> "$GITHUB_OUTPUT" ;;
+            failure)   echo "detected_status=failure"   >> "$GITHUB_OUTPUT" ;;
+            cancelled) echo "detected_status=cancelled" >> "$GITHUB_OUTPUT" ;;
+            *)         echo "detected_status=success"   >> "$GITHUB_OUTPUT" ;;
           esac
         else
-          echo "detected_status=${{ inputs.status }}" >> $GITHUB_OUTPUT
+          echo "detected_status=$INPUT_STATUS" >> "$GITHUB_OUTPUT"
         fi
 
-        # Commit message with robust fallback
-        commit_msg="${{ github.event.head_commit.message || github.event.pull_request.title || '' }}"
+        # Commit message — read from env, never from inline ${{ }} interpolation.
+        commit_msg="${HEAD_COMMIT_MSG:-${PR_TITLE:-}}"
         if [[ -z "$commit_msg" ]]; then
-          # Try git log as fallback, but ensure we're in a git repo
           if git rev-parse --git-dir >/dev/null 2>&1; then
             commit_msg=$(git log -1 --pretty=%B 2>/dev/null | head -1 || echo "N/A")
           else
             commit_msg="N/A"
           fi
         fi
-        # Clean up commit message (remove extra whitespace, limit length)
-        commit_msg=$(echo "$commit_msg" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cut -c1-200)
+        # Sanitize: strip newlines, trim whitespace, cap length, escape JSON-breaking chars.
+        commit_msg=$(printf '%s' "$commit_msg" | tr -d '\n\r' \
+          | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+          | cut -c1-200 \
+          | sed 's/\\/\\\\/g; s/"/\\"/g')
         [[ -z "$commit_msg" ]] && commit_msg="N/A"
-        echo "commit_message=$commit_msg" >> $GITHUB_OUTPUT
+        echo "commit_message=$commit_msg" >> "$GITHUB_OUTPUT"
+
+        # PR title sanitized for JSON embedding
+        pr_title_safe=$(printf '%s' "${PR_TITLE:-}" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g')
+        echo "pr_title_safe=$pr_title_safe" >> "$GITHUB_OUTPUT"
 
         # Generate reliable Unix timestamp for Slack 'ts' field
-        # Try multiple sources, fallback to current time if all fail
         unix_ts=""
-        
-        # Try PR created timestamp
-        if [[ -n "${{ github.event.pull_request.created_at || '' }}" ]]; then
-          unix_ts=$(date -d "${{ github.event.pull_request.created_at }}" +%s 2>/dev/null || echo "")
+        if [[ -n "${PR_CREATED_AT:-}" ]]; then
+          unix_ts=$(date -d "$PR_CREATED_AT" +%s 2>/dev/null || echo "")
         fi
-        
-        # Try commit timestamp  
-        if [[ -z "$unix_ts" && -n "${{ github.event.head_commit.timestamp || '' }}" ]]; then
-          unix_ts=$(date -d "${{ github.event.head_commit.timestamp }}" +%s 2>/dev/null || echo "")
+        if [[ -z "$unix_ts" && -n "${HEAD_COMMIT_TS:-}" ]]; then
+          unix_ts=$(date -d "$HEAD_COMMIT_TS" +%s 2>/dev/null || echo "")
         fi
-        
-        # Try workflow run started timestamp
-        if [[ -z "$unix_ts" && -n "${{ github.run_started_at || '' }}" ]]; then
-          unix_ts=$(date -d "${{ github.run_started_at }}" +%s 2>/dev/null || echo "")
+        if [[ -z "$unix_ts" && -n "${RUN_STARTED_AT:-}" ]]; then
+          unix_ts=$(date -d "$RUN_STARTED_AT" +%s 2>/dev/null || echo "")
         fi
-        
-        # Final fallback: current time
         if [[ -z "$unix_ts" ]]; then
           unix_ts=$(date +%s)
         fi
-        
-        echo "unix_timestamp=$unix_ts" >> $GITHUB_OUTPUT
+        echo "unix_timestamp=$unix_ts" >> "$GITHUB_OUTPUT"
+
+    - name: Validate update mode inputs
+      if: inputs.mode == 'update'
+      shell: bash
+      run: |
+        if [[ -z "${{ inputs.slack_ts }}" ]]; then
+          echo "::error::slack_ts is required when mode=update. Pass the 'ts' output from the 'start' step."
+          exit 1
+        fi
 
     - name: Define status metadata
       id: status-meta
       shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        DETECTED_STATUS: ${{ steps.auto-meta.outputs.detected_status }}
+        INPUT_STATUS: ${{ inputs.status }}
       run: |
         set -euo pipefail
-        # Context-aware status text based on event type
-        event_context=""
-        case "${{ github.event_name }}" in
-          pull_request) event_context="PR Workflow" ;;
-          push) event_context="Push Workflow" ;;
+        case "$GITHUB_EVENT_NAME" in
+          pull_request)      event_context="PR Workflow" ;;
+          push)              event_context="Push Workflow" ;;
           workflow_dispatch) event_context="Manual Workflow" ;;
-          schedule) event_context="Scheduled Workflow" ;;
-          *) event_context="Workflow" ;;
+          schedule)          event_context="Scheduled Workflow" ;;
+          *)                 event_context="Workflow" ;;
         esac
 
-        if [[ "${{ inputs.mode }}" == "start" ]]; then
-          echo "color=dbab09" >> $GITHUB_OUTPUT
-          echo "status_emoji=:hourglass_flowing_sand:" >> $GITHUB_OUTPUT
-          echo "status_text=${event_context} Started" >> $GITHUB_OUTPUT
+        if [[ "$INPUT_MODE" == "start" ]]; then
+          echo "color=dbab09" >> "$GITHUB_OUTPUT"
+          echo "status_emoji=:hourglass_flowing_sand:" >> "$GITHUB_OUTPUT"
+          echo "status_text=${event_context} Started" >> "$GITHUB_OUTPUT"
         else
-          case "${{ steps.auto-meta.outputs.detected_status }}" in
+          case "$DETECTED_STATUS" in
             success)
-              echo "color=36a64f" >> $GITHUB_OUTPUT
-              echo "status_emoji=:white_check_mark:" >> $GITHUB_OUTPUT
-              echo "status_text=${event_context} Succeeded" >> $GITHUB_OUTPUT
+              echo "color=36a64f" >> "$GITHUB_OUTPUT"
+              echo "status_emoji=:white_check_mark:" >> "$GITHUB_OUTPUT"
+              echo "status_text=${event_context} Succeeded" >> "$GITHUB_OUTPUT"
               ;;
             failure)
-              echo "color=ff0000" >> $GITHUB_OUTPUT
-              echo "status_emoji=:x:" >> $GITHUB_OUTPUT
-              echo "status_text=${event_context} Failed" >> $GITHUB_OUTPUT
+              echo "color=ff0000" >> "$GITHUB_OUTPUT"
+              echo "status_emoji=:x:" >> "$GITHUB_OUTPUT"
+              echo "status_text=${event_context} Failed" >> "$GITHUB_OUTPUT"
               ;;
             cancelled)
-              echo "color=aaaaaa" >> $GITHUB_OUTPUT
-              echo "status_emoji=:warning:" >> $GITHUB_OUTPUT
-              echo "status_text=${event_context} Cancelled" >> $GITHUB_OUTPUT
+              echo "color=aaaaaa" >> "$GITHUB_OUTPUT"
+              echo "status_emoji=:warning:" >> "$GITHUB_OUTPUT"
+              echo "status_text=${event_context} Cancelled" >> "$GITHUB_OUTPUT"
               ;;
             *)
-              echo "Unknown status: ${{ inputs.status }}"
+              echo "Unknown status: $DETECTED_STATUS"
               exit 1
               ;;
           esac
@@ -220,7 +234,7 @@ runs:
                     "short": true
                   },
                   {
-                    "title": "Event Type", 
+                    "title": "Event Type",
                     "value": "<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.event_name == 'pull_request' && 'Pull Request' || github.event_name == 'push' && 'Code Push' || github.event_name == 'workflow_dispatch' && 'Manual Trigger' || github.event_name == 'schedule' && 'Scheduled Run' || github.event_name }}>",
                     "short": true
                   },
@@ -260,10 +274,10 @@ runs:
                     "short": true
                   }},
                   {{
-                    "title": "PR Title", 
+                    "title": "PR Title",
                     "value": "{2}",
                     "short": true
-                  }}', github.repository, github.event.pull_request.base.ref, github.event.pull_request.title) || '' }},
+                  }}', github.repository, github.event.pull_request.base.ref, steps.auto-meta.outputs.pr_title_safe) || '' }},
                   {
                     "title": "Commit Message",
                     "value": "${{ steps.auto-meta.outputs.commit_message }}",
