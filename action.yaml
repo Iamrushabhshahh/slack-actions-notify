@@ -1,94 +1,156 @@
 name: "Slack Actions Notify"
-description: "Rich Slack notifications for GitHub Actions with timestamps, duration tracking, and thread updates"
+description: "Rich Slack notifications for GitHub Actions — start/update threading, duration tracking, custom messages, webhook & token auth"
 
 branding:
   icon: "message-circle"
   color: "green"
 
 inputs:
-  slack_channel:
-    description: "Slack channel ID where notifications will be sent (e.g., C1234567890)"
-    required: true
+  # ── Auth (one required) ────────────────────────────────────────────────────
   slack_token:
-    description: "Slack bot token with chat:write permissions (starts with xoxb-)"
-    required: true
+    description: "Slack bot token (xoxb-…). Required for start/update threading."
+    required: false
+  slack_webhook_url:
+    description: "Slack incoming webhook URL. Use when you don't need threading."
+    required: false
+
+  # ── Destination ────────────────────────────────────────────────────────────
+  slack_channel:
+    description: "Slack channel ID (e.g. C1234567890). Required with slack_token."
+    required: false
+
+  # ── Threading ──────────────────────────────────────────────────────────────
   mode:
-    description: "Notification mode: 'start' for initial notification or 'update' for final status"
+    description: "'start' posts a new message and returns ts. 'update' edits it with final status."
     required: false
     default: "update"
-  status:
-    description: "Workflow status override (auto-detected from job.status if not provided)"
-    required: false
   slack_ts:
-    description: "Slack message timestamp for thread updates (use output from 'start' mode)"
+    description: "Message timestamp from a previous 'start' call. Required for mode=update."
     required: false
   start_time:
-    description: "Workflow start timestamp for duration calculation (use output from 'start' mode)"
+    description: "Start timestamp from a previous 'start' call. Used to compute duration."
     required: false
+  status:
+    description: "Workflow status override. Auto-detected from job.status if omitted."
+    required: false
+
+  # ── Content ────────────────────────────────────────────────────────────────
+  title:
+    description: "Custom notification title. Defaults to 'repo/workflow — status'."
+    required: false
+  message:
+    description: "Extra message body shown below the fields."
+    required: false
+  message_on_success:
+    description: "Message override when the workflow succeeds. Takes precedence over message."
+    required: false
+  message_on_failure:
+    description: "Message override when the workflow fails. Takes precedence over message."
+    required: false
+  message_on_cancel:
+    description: "Message override when the workflow is cancelled. Takes precedence over message."
+    required: false
+  mention:
+    description: "Slack mention prepended to the notification. Values: 'here', 'channel', a bare user-ID (U123456), or a pre-formatted mention (<@U123456>)."
+    required: false
+
+  # ── Appearance ─────────────────────────────────────────────────────────────
+  username:
+    description: "Custom bot display name. Only applies to new messages (mode=start)."
+    required: false
+  icon_emoji:
+    description: "Custom bot icon emoji, e.g. ':rocket:'. Overrides icon_url. Only applies to mode=start."
+    required: false
+  icon_url:
+    description: "Custom bot icon URL. Only applies to mode=start."
+    required: false
+  minimal:
+    description: "Set to 'true' to show only status, branch/PR, commit, and duration — no metadata noise."
+    required: false
+    default: "false"
+
+  # ── Locale ─────────────────────────────────────────────────────────────────
   timezone:
-    description: "Timezone for timestamp display (e.g., 'Asia/Kolkata', 'America/New_York'). Defaults to UTC if invalid"
+    description: "Timezone for timestamps, e.g. 'Asia/Kolkata'. Falls back to UTC if invalid."
     required: false
     default: "UTC"
 
 runs:
   using: "composite"
   steps:
+
+    # ── 1. Validate inputs ────────────────────────────────────────────────────
+    - name: Validate inputs
+      shell: bash
+      env:
+        INPUT_MODE:         ${{ inputs.mode }}
+        INPUT_SLACK_TOKEN:  ${{ inputs.slack_token }}
+        INPUT_SLACK_WEBHOOK: ${{ inputs.slack_webhook_url }}
+        INPUT_SLACK_TS:     ${{ inputs.slack_ts }}
+        INPUT_SLACK_CHANNEL: ${{ inputs.slack_channel }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${INPUT_SLACK_TOKEN:-}" && -z "${INPUT_SLACK_WEBHOOK:-}" ]]; then
+          echo "::error::Provide either slack_token or slack_webhook_url."
+          exit 1
+        fi
+        if [[ -n "${INPUT_SLACK_TOKEN:-}" && -z "${INPUT_SLACK_CHANNEL:-}" ]]; then
+          echo "::error::slack_channel is required when using slack_token."
+          exit 1
+        fi
+        if [[ "$INPUT_MODE" == "update" && -n "${INPUT_SLACK_TOKEN:-}" && -z "${INPUT_SLACK_TS:-}" ]]; then
+          echo "::error::slack_ts is required for mode=update (token auth). Pass the 'ts' output from the 'start' step."
+          exit 1
+        fi
+        if [[ "$INPUT_MODE" == "update" && -z "${INPUT_SLACK_TOKEN:-}" ]]; then
+          echo "::warning::mode=update with webhook auth has no effect — webhooks don't support message threading. Use slack_token for threading."
+        fi
+
+    # ── 2. Auto-generate metadata ─────────────────────────────────────────────
     - name: Auto-generate metadata
       id: auto-meta
       shell: bash
       env:
-        # All user/caller-controlled values are passed via env to prevent shell injection.
-        # Never interpolate ${{ expr }} directly into the run: script body.
-        INPUT_TIMEZONE: ${{ inputs.timezone }}
-        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_TIMEZONE:   ${{ inputs.timezone }}
+        INPUT_MODE:       ${{ inputs.mode }}
         INPUT_START_TIME: ${{ inputs.start_time }}
-        INPUT_STATUS: ${{ inputs.status }}
-        HEAD_COMMIT_MSG: ${{ github.event.head_commit.message }}
-        PR_TITLE: ${{ github.event.pull_request.title }}
-        PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
-        HEAD_COMMIT_TS: ${{ github.event.head_commit.timestamp }}
-        RUN_STARTED_AT: ${{ github.run_started_at }}
-        JOB_STATUS: ${{ job.status }}
+        INPUT_STATUS:     ${{ inputs.status }}
+        HEAD_COMMIT_MSG:  ${{ github.event.head_commit.message }}
+        PR_TITLE:         ${{ github.event.pull_request.title }}
+        PR_CREATED_AT:    ${{ github.event.pull_request.created_at }}
+        HEAD_COMMIT_TS:   ${{ github.event.head_commit.timestamp }}
+        RUN_STARTED_AT:   ${{ github.run_started_at }}
+        JOB_STATUS:       ${{ job.status }}
       run: |
         set -euo pipefail
 
-        # Validate and set timezone
         timezone="${INPUT_TIMEZONE:-UTC}"
         [[ -z "$timezone" ]] && timezone="UTC"
-
         if ! TZ="$timezone" date >/dev/null 2>&1; then
           echo "Warning: Invalid timezone '$timezone', falling back to UTC"
           timezone="UTC"
         fi
         echo "timezone=$timezone" >> "$GITHUB_OUTPUT"
 
-        # Timestamp in specified timezone
         if [[ "$timezone" == "UTC" ]]; then
           current_timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
         else
           current_timestamp=$(TZ="$timezone" date +"%Y-%m-%d %H:%M:%S %Z")
         fi
         echo "timestamp=$current_timestamp" >> "$GITHUB_OUTPUT"
-
-        # Auto-generate short SHA
         echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
-        # Duration (only in update mode)
         if [[ "$INPUT_MODE" == "update" && -n "${INPUT_START_TIME:-}" ]]; then
           start_epoch=$(date -d "$INPUT_START_TIME" +%s 2>/dev/null || echo "0")
           current_epoch=$(date -u +%s)
           duration=$((current_epoch - start_epoch))
-
           if [[ $duration -ge 3600 ]]; then
-            hours=$((duration / 3600))
-            minutes=$(((duration % 3600) / 60))
-            seconds=$((duration % 60))
+            hours=$((duration / 3600)); minutes=$(((duration % 3600) / 60)); seconds=$((duration % 60))
             formatted="${hours}h"
             [[ $minutes -gt 0 ]] && formatted+=" ${minutes}m"
             [[ $seconds -gt 0 ]] && formatted+=" ${seconds}s"
           elif [[ $duration -ge 60 ]]; then
-            minutes=$((duration / 60))
-            seconds=$((duration % 60))
+            minutes=$((duration / 60)); seconds=$((duration % 60))
             formatted="${minutes}m"
             [[ $seconds -gt 0 ]] && formatted+=" ${seconds}s"
           else
@@ -96,13 +158,12 @@ runs:
           fi
           echo "duration=$formatted" >> "$GITHUB_OUTPUT"
           echo "duration_seconds=$duration" >> "$GITHUB_OUTPUT"
-
           if [[ "$timezone" == "UTC" ]]; then
-            formatted_start_time=$(date -u -d "$INPUT_START_TIME" +"%-H:%M %d-%m-%Y UTC" 2>/dev/null || echo "N/A")
+            formatted_start=$(date -u -d "$INPUT_START_TIME" +"%-H:%M %d-%m-%Y UTC" 2>/dev/null || echo "N/A")
           else
-            formatted_start_time=$(TZ="$timezone" date -d "$INPUT_START_TIME" +"%-H:%M %d-%m-%Y %Z" 2>/dev/null || echo "N/A")
+            formatted_start=$(TZ="$timezone" date -d "$INPUT_START_TIME" +"%-H:%M %d-%m-%Y %Z" 2>/dev/null || echo "N/A")
           fi
-          echo "formatted_start_time=$formatted_start_time" >> "$GITHUB_OUTPUT"
+          echo "formatted_start_time=$formatted_start" >> "$GITHUB_OUTPUT"
         else
           echo "duration=" >> "$GITHUB_OUTPUT"
           echo "duration_seconds=0" >> "$GITHUB_OUTPUT"
@@ -110,7 +171,6 @@ runs:
           echo "formatted_start_time=" >> "$GITHUB_OUTPUT"
         fi
 
-        # Auto-detect status
         if [[ -z "${INPUT_STATUS:-}" ]]; then
           case "$JOB_STATUS" in
             success)   echo "detected_status=success"   >> "$GITHUB_OUTPUT" ;;
@@ -122,7 +182,7 @@ runs:
           echo "detected_status=$INPUT_STATUS" >> "$GITHUB_OUTPUT"
         fi
 
-        # Commit message — read from env, never from inline ${{ }} interpolation.
+        # Commit message — read from env to prevent shell injection.
         commit_msg="${HEAD_COMMIT_MSG:-${PR_TITLE:-}}"
         if [[ -z "$commit_msg" ]]; then
           if git rev-parse --git-dir >/dev/null 2>&1; then
@@ -131,50 +191,28 @@ runs:
             commit_msg="N/A"
           fi
         fi
-        # Sanitize: strip newlines, trim whitespace, cap length, escape JSON-breaking chars.
-        commit_msg=$(printf '%s' "$commit_msg" | tr -d '\n\r' \
-          | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
-          | cut -c1-200 \
-          | sed 's/\\/\\\\/g; s/"/\\"/g')
+        commit_msg=$(printf '%s' "$commit_msg" | tr -d '\n\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cut -c1-200)
         [[ -z "$commit_msg" ]] && commit_msg="N/A"
         echo "commit_message=$commit_msg" >> "$GITHUB_OUTPUT"
 
-        # PR title sanitized for JSON embedding
-        pr_title_safe=$(printf '%s' "${PR_TITLE:-}" | tr -d '\n\r' | sed 's/\\/\\\\/g; s/"/\\"/g')
-        echo "pr_title_safe=$pr_title_safe" >> "$GITHUB_OUTPUT"
+        # PR title (newlines stripped; jq handles JSON escaping downstream)
+        pr_title=$(printf '%s' "${PR_TITLE:-}" | tr -d '\n\r')
+        echo "pr_title=$pr_title" >> "$GITHUB_OUTPUT"
 
-        # Generate reliable Unix timestamp for Slack 'ts' field
         unix_ts=""
-        if [[ -n "${PR_CREATED_AT:-}" ]]; then
-          unix_ts=$(date -d "$PR_CREATED_AT" +%s 2>/dev/null || echo "")
-        fi
-        if [[ -z "$unix_ts" && -n "${HEAD_COMMIT_TS:-}" ]]; then
-          unix_ts=$(date -d "$HEAD_COMMIT_TS" +%s 2>/dev/null || echo "")
-        fi
-        if [[ -z "$unix_ts" && -n "${RUN_STARTED_AT:-}" ]]; then
-          unix_ts=$(date -d "$RUN_STARTED_AT" +%s 2>/dev/null || echo "")
-        fi
-        if [[ -z "$unix_ts" ]]; then
-          unix_ts=$(date +%s)
-        fi
+        [[ -n "${PR_CREATED_AT:-}" ]]  && unix_ts=$(date -d "$PR_CREATED_AT"  +%s 2>/dev/null || echo "")
+        [[ -z "$unix_ts" && -n "${HEAD_COMMIT_TS:-}" ]] && unix_ts=$(date -d "$HEAD_COMMIT_TS" +%s 2>/dev/null || echo "")
+        [[ -z "$unix_ts" && -n "${RUN_STARTED_AT:-}" ]] && unix_ts=$(date -d "$RUN_STARTED_AT" +%s 2>/dev/null || echo "")
+        [[ -z "$unix_ts" ]] && unix_ts=$(date +%s)
         echo "unix_timestamp=$unix_ts" >> "$GITHUB_OUTPUT"
 
-    - name: Validate update mode inputs
-      if: inputs.mode == 'update'
-      shell: bash
-      run: |
-        if [[ -z "${{ inputs.slack_ts }}" ]]; then
-          echo "::error::slack_ts is required when mode=update. Pass the 'ts' output from the 'start' step."
-          exit 1
-        fi
-
+    # ── 3. Resolve status colour / label ─────────────────────────────────────
     - name: Define status metadata
       id: status-meta
       shell: bash
       env:
-        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_MODE:      ${{ inputs.mode }}
         DETECTED_STATUS: ${{ steps.auto-meta.outputs.detected_status }}
-        INPUT_STATUS: ${{ inputs.status }}
       run: |
         set -euo pipefail
         case "$GITHUB_EVENT_NAME" in
@@ -184,117 +222,243 @@ runs:
           schedule)          event_context="Scheduled Workflow" ;;
           *)                 event_context="Workflow" ;;
         esac
-
         if [[ "$INPUT_MODE" == "start" ]]; then
-          echo "color=dbab09" >> "$GITHUB_OUTPUT"
-          echo "status_emoji=:hourglass_flowing_sand:" >> "$GITHUB_OUTPUT"
-          echo "status_text=${event_context} Started" >> "$GITHUB_OUTPUT"
+          echo "color=dbab09"                          >> "$GITHUB_OUTPUT"
+          echo "status_text=${event_context} Started"  >> "$GITHUB_OUTPUT"
         else
           case "$DETECTED_STATUS" in
             success)
-              echo "color=36a64f" >> "$GITHUB_OUTPUT"
-              echo "status_emoji=:white_check_mark:" >> "$GITHUB_OUTPUT"
-              echo "status_text=${event_context} Succeeded" >> "$GITHUB_OUTPUT"
+              echo "color=36a64f"                            >> "$GITHUB_OUTPUT"
+              echo "status_text=${event_context} Succeeded"  >> "$GITHUB_OUTPUT"
               ;;
             failure)
-              echo "color=ff0000" >> "$GITHUB_OUTPUT"
-              echo "status_emoji=:x:" >> "$GITHUB_OUTPUT"
-              echo "status_text=${event_context} Failed" >> "$GITHUB_OUTPUT"
+              echo "color=ff0000"                         >> "$GITHUB_OUTPUT"
+              echo "status_text=${event_context} Failed"  >> "$GITHUB_OUTPUT"
               ;;
             cancelled)
-              echo "color=aaaaaa" >> "$GITHUB_OUTPUT"
-              echo "status_emoji=:warning:" >> "$GITHUB_OUTPUT"
-              echo "status_text=${event_context} Cancelled" >> "$GITHUB_OUTPUT"
+              echo "color=aaaaaa"                            >> "$GITHUB_OUTPUT"
+              echo "status_text=${event_context} Cancelled"  >> "$GITHUB_OUTPUT"
               ;;
             *)
-              echo "Unknown status: $DETECTED_STATUS"
-              exit 1
+              echo "Unknown status: $DETECTED_STATUS" && exit 1
               ;;
           esac
         fi
 
-    - name: Send Slack notification
-      id: slack-message
+    # ── 4. Build JSON payload (jq handles all escaping — no injection risk) ───
+    - name: Build Slack payload
+      id: build-payload
+      shell: bash
+      env:
+        INPUT_MODE:               ${{ inputs.mode }}
+        INPUT_MINIMAL:            ${{ inputs.minimal }}
+        INPUT_TITLE:              ${{ inputs.title }}
+        INPUT_MESSAGE:            ${{ inputs.message }}
+        INPUT_MESSAGE_ON_SUCCESS: ${{ inputs.message_on_success }}
+        INPUT_MESSAGE_ON_FAILURE: ${{ inputs.message_on_failure }}
+        INPUT_MESSAGE_ON_CANCEL:  ${{ inputs.message_on_cancel }}
+        INPUT_MENTION:            ${{ inputs.mention }}
+        INPUT_USERNAME:           ${{ inputs.username }}
+        INPUT_ICON_EMOJI:         ${{ inputs.icon_emoji }}
+        INPUT_ICON_URL:           ${{ inputs.icon_url }}
+        INPUT_SLACK_CHANNEL:      ${{ inputs.slack_channel }}
+        INPUT_SLACK_TS:           ${{ inputs.slack_ts }}
+        DETECTED_STATUS:          ${{ steps.auto-meta.outputs.detected_status }}
+        META_TIMESTAMP:           ${{ steps.auto-meta.outputs.timestamp }}
+        META_SHORT_SHA:           ${{ steps.auto-meta.outputs.short_sha }}
+        META_DURATION:            ${{ steps.auto-meta.outputs.duration }}
+        META_FORMATTED_START:     ${{ steps.auto-meta.outputs.formatted_start_time }}
+        META_UNIX_TS:             ${{ steps.auto-meta.outputs.unix_timestamp }}
+        META_COMMIT_MSG:          ${{ steps.auto-meta.outputs.commit_message }}
+        META_PR_TITLE:            ${{ steps.auto-meta.outputs.pr_title }}
+        STATUS_COLOR:             ${{ steps.status-meta.outputs.color }}
+        STATUS_TEXT:              ${{ steps.status-meta.outputs.status_text }}
+        PR_NUMBER:                ${{ github.event.pull_request.number }}
+        PR_BASE_REF:              ${{ github.event.pull_request.base.ref }}
+      run: |
+        set -euo pipefail
+
+        # ── Mention prefix ───────────────────────────────────────────────────
+        mention_prefix=""
+        case "${INPUT_MENTION:-}" in
+          here)         mention_prefix="<!here> " ;;
+          channel)      mention_prefix="<!channel> " ;;
+          "<@"*">")     mention_prefix="${INPUT_MENTION} " ;;
+          "@"?*)        mention_prefix="<${INPUT_MENTION}> " ;;
+          [A-Z0-9]?*)   mention_prefix="<@${INPUT_MENTION}> " ;;
+        esac
+
+        # ── Resolve message (per-status overrides take precedence) ───────────
+        resolved_msg="${INPUT_MESSAGE:-}"
+        if [[ "$INPUT_MODE" != "start" ]]; then
+          case "$DETECTED_STATUS" in
+            success)   [[ -n "${INPUT_MESSAGE_ON_SUCCESS:-}" ]] && resolved_msg="$INPUT_MESSAGE_ON_SUCCESS" ;;
+            failure)   [[ -n "${INPUT_MESSAGE_ON_FAILURE:-}" ]] && resolved_msg="$INPUT_MESSAGE_ON_FAILURE" ;;
+            cancelled) [[ -n "${INPUT_MESSAGE_ON_CANCEL:-}"  ]] && resolved_msg="$INPUT_MESSAGE_ON_CANCEL"  ;;
+          esac
+        fi
+
+        # ── Header text ──────────────────────────────────────────────────────
+        if [[ -n "${INPUT_TITLE:-}" ]]; then
+          header="${mention_prefix}*${INPUT_TITLE}*"
+        else
+          header="${mention_prefix}*${GITHUB_REPOSITORY}/${GITHUB_WORKFLOW}* — ${STATUS_TEXT} at *${META_TIMESTAMP}*"
+        fi
+
+        # ── Build fields array with jq (automatic JSON escaping) ─────────────
+        if [[ "${INPUT_MINIMAL:-false}" == "true" ]]; then
+          fields='[]'
+        else
+          fields=$(jq -n \
+            --arg actor    "$GITHUB_ACTOR" \
+            --arg repo     "$GITHUB_REPOSITORY" \
+            --arg run_id   "$GITHUB_RUN_ID" \
+            --arg event    "$GITHUB_EVENT_NAME" \
+            --arg workflow "$GITHUB_WORKFLOW" \
+            --arg run_num  "$GITHUB_RUN_NUMBER" \
+            --arg srv_url  "$GITHUB_SERVER_URL" \
+            '[
+              {"title":"Triggered By","value":"<https://github.com/\($actor)|\($actor)>","short":true},
+              {"title":"Event Type","value":"<\($srv_url)/\($repo)/actions/runs/\($run_id)|\($event)>","short":true},
+              {"title":"Workflow","value":"<https://github.com/\($repo)/actions?workflow=\($workflow)|\($workflow)>","short":true},
+              {"title":"Run Number","value":"<\($srv_url)/\($repo)/actions/runs/\($run_id)|#\($run_num)>","short":true}
+            ]')
+        fi
+
+        # Branch or PR field
+        if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+          fields=$(jq -n \
+            --argjson base  "$fields" \
+            --arg     repo  "$GITHUB_REPOSITORY" \
+            --arg     num   "${PR_NUMBER:-}" \
+            --arg     sha   "$META_SHORT_SHA" \
+            --arg     bref  "${PR_BASE_REF:-}" \
+            --arg     title "${META_PR_TITLE:-}" \
+            '$base + [
+              {"title":"Pull Request","value":"<https://github.com/\($repo)/pull/\($num)|#\($num)>","short":true},
+              {"title":"Commit","value":"<https://github.com/\($repo)/commit/\($sha)|\($sha)>","short":true},
+              {"title":"Target Branch","value":"<https://github.com/\($repo)/tree/\($bref)|\($bref)>","short":true},
+              {"title":"PR Title","value":$title,"short":false}
+            ]')
+        else
+          fields=$(jq -n \
+            --argjson base   "$fields" \
+            --arg     repo   "$GITHUB_REPOSITORY" \
+            --arg     branch "$GITHUB_REF_NAME" \
+            --arg     sha    "$META_SHORT_SHA" \
+            '$base + [
+              {"title":"Branch","value":"<https://github.com/\($repo)/tree/\($branch)|\($branch)>","short":true},
+              {"title":"Commit","value":"<https://github.com/\($repo)/commit/\($sha)|\($sha)>","short":true}
+            ]')
+        fi
+
+        # Duration + start time (update mode only)
+        if [[ "$INPUT_MODE" == "update" && -n "${META_DURATION:-}" ]]; then
+          fields=$(jq -n --argjson f "$fields" --arg v "$META_DURATION" \
+            '$f + [{"title":"Execution Time","value":$v,"short":true}]')
+        fi
+        if [[ "$INPUT_MODE" == "update" && -n "${META_FORMATTED_START:-}" ]]; then
+          fields=$(jq -n --argjson f "$fields" --arg v "$META_FORMATTED_START" \
+            '$f + [{"title":"Started At","value":$v,"short":true}]')
+        fi
+
+        # Commit message (always shown)
+        fields=$(jq -n --argjson f "$fields" --arg v "$META_COMMIT_MSG" \
+          '$f + [{"title":"Commit Message","value":$v,"short":false}]')
+
+        # Custom message (if set)
+        if [[ -n "${resolved_msg:-}" ]]; then
+          fields=$(jq -n --argjson f "$fields" --arg v "$resolved_msg" \
+            '$f + [{"title":"Message","value":$v,"short":false}]')
+        fi
+
+        # ── Assemble token-mode payload (includes channel + ts) ───────────────
+        token_payload=$(jq -n \
+          --arg     ts      "${INPUT_SLACK_TS:-}" \
+          --arg     channel "${INPUT_SLACK_CHANNEL:-}" \
+          --arg     text    "$header" \
+          --arg     color   "$STATUS_COLOR" \
+          --argjson fields  "$fields" \
+          --argjson unix_ts "${META_UNIX_TS}" \
+          '{
+            ts:      $ts,
+            channel: $channel,
+            text:    $text,
+            attachments: [{
+              color:        $color,
+              fields:       $fields,
+              footer:       "GitHub Actions Bot",
+              footer_icon:  "https://github.com/favicon.ico",
+              ts:           $unix_ts
+            }]
+          }')
+
+        # Bot appearance — only relevant for chat.postMessage (mode=start)
+        [[ -n "${INPUT_USERNAME:-}"   ]] && token_payload=$(jq --arg v "$INPUT_USERNAME"  '. + {username:  $v}' <<< "$token_payload")
+        [[ -n "${INPUT_ICON_EMOJI:-}" ]] && token_payload=$(jq --arg v "$INPUT_ICON_EMOJI" '. + {icon_emoji: $v}' <<< "$token_payload")
+        if [[ -z "${INPUT_ICON_EMOJI:-}" && -n "${INPUT_ICON_URL:-}" ]]; then
+          token_payload=$(jq --arg v "$INPUT_ICON_URL" '. + {icon_url: $v}' <<< "$token_payload")
+        fi
+
+        token_file=$(mktemp /tmp/slack-token-XXXXXX.json)
+        printf '%s' "$token_payload" > "$token_file"
+        echo "token_file=$token_file" >> "$GITHUB_OUTPUT"
+
+        # ── Assemble webhook payload (no channel/ts — destination is in the URL) ──
+        webhook_payload=$(jq -n \
+          --arg     text    "$header" \
+          --arg     color   "$STATUS_COLOR" \
+          --argjson fields  "$fields" \
+          --argjson unix_ts "${META_UNIX_TS}" \
+          '{
+            text: $text,
+            attachments: [{
+              color:        $color,
+              fields:       $fields,
+              footer:       "GitHub Actions Bot",
+              footer_icon:  "https://github.com/favicon.ico",
+              ts:           $unix_ts
+            }]
+          }')
+
+        webhook_file=$(mktemp /tmp/slack-webhook-XXXXXX.json)
+        printf '%s' "$webhook_payload" > "$webhook_file"
+        echo "webhook_file=$webhook_file" >> "$GITHUB_OUTPUT"
+
+    # ── 5a. Send via bot token (supports threading) ───────────────────────────
+    - name: Send Slack notification (token)
+      id: slack-token
+      if: inputs.slack_token != ''
       uses: slackapi/slack-github-action@v2.1.1
       with:
         method: ${{ inputs.mode == 'start' && 'chat.postMessage' || 'chat.update' }}
         token: ${{ inputs.slack_token }}
-        payload: |
-          {
-            "ts": "${{ inputs.slack_ts }}",
-            "channel": "${{ inputs.slack_channel }}",
-            "text": "*${{ github.repository }}/${{ github.workflow }}* — ${{ steps.status-meta.outputs.status_text }} at *${{ steps.auto-meta.outputs.timestamp }}*",
-            "attachments": [
-              {
-                "color": "${{ steps.status-meta.outputs.color }}",
-                "fields": [
-                  {
-                    "title": "Triggered By",
-                    "value": "<https://github.com/${{ github.actor }}|${{ github.actor }}>",
-                    "short": true
-                  },
-                  {
-                    "title": "Event Type",
-                    "value": "<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|${{ github.event_name == 'pull_request' && 'Pull Request' || github.event_name == 'push' && 'Code Push' || github.event_name == 'workflow_dispatch' && 'Manual Trigger' || github.event_name == 'schedule' && 'Scheduled Run' || github.event_name }}>",
-                    "short": true
-                  },
-                  {
-                    "title": "${{ github.event_name == 'pull_request' && 'Pull Request' || 'Branch' }}",
-                    "value": "${{ github.event_name == 'pull_request' && format('<https://github.com/{0}/pull/{1}|#{1}>', github.repository, github.event.pull_request.number) || format('<https://github.com/{0}/tree/{1}|{1}>', github.repository, github.ref_name) }}",
-                    "short": true
-                  },
-                  {
-                    "title": "Commit",
-                    "value": "<https://github.com/${{ github.repository }}/commit/${{ steps.auto-meta.outputs.short_sha }}|${{ steps.auto-meta.outputs.short_sha }}>",
-                    "short": true
-                  },
-                  {
-                    "title": "Workflow",
-                    "value": "<https://github.com/${{ github.repository }}/actions?workflow=${{ github.workflow }}|${{ github.workflow }}>",
-                    "short": true
-                  },
-                  {
-                    "title": "Run Number",
-                    "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>",
-                    "short": true
-                  }${{ inputs.mode == 'update' && steps.auto-meta.outputs.duration != '' && format(',
-                  {{
-                    "title": "Execution Time",
-                    "value": "{0}",
-                    "short": true
-                  }}', steps.auto-meta.outputs.duration) || '' }}${{ inputs.mode == 'update' && steps.auto-meta.outputs.formatted_start_time != '' && format(',
-                  {{
-                    "title": "Started At",
-                    "value": "{0}",
-                    "short": true
-                  }}', steps.auto-meta.outputs.formatted_start_time) || '' }}${{ github.event_name == 'pull_request' && format(',
-                  {{
-                    "title": "Target Branch",
-                    "value": "<https://github.com/{0}/tree/{1}|{1}>",
-                    "short": true
-                  }},
-                  {{
-                    "title": "PR Title",
-                    "value": "{2}",
-                    "short": true
-                  }}', github.repository, github.event.pull_request.base.ref, steps.auto-meta.outputs.pr_title_safe) || '' }},
-                  {
-                    "title": "Commit Message",
-                    "value": "${{ steps.auto-meta.outputs.commit_message }}",
-                    "short": false
-                  }
-                ],
-                "footer": "GitHub Actions Bot",
-                "footer_icon": "https://github.com/favicon.ico",
-                "ts": ${{ steps.auto-meta.outputs.unix_timestamp }}
-              }
-            ]
-          }
+        payload-file-path: ${{ steps.build-payload.outputs.token_file }}
+
+    # ── 5b. Send via incoming webhook (no threading) ──────────────────────────
+    - name: Send Slack notification (webhook)
+      id: slack-webhook
+      if: inputs.slack_webhook_url != '' && inputs.slack_token == ''
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        method: webhooks.execute
+        webhook: ${{ inputs.slack_webhook_url }}
+        webhook-type: incoming-webhook
+        payload-file-path: ${{ steps.build-payload.outputs.webhook_file }}
+
+    # ── 6. Cleanup temp files ─────────────────────────────────────────────────
+    - name: Cleanup payload files
+      if: always()
+      shell: bash
+      env:
+        TOKEN_FILE:   ${{ steps.build-payload.outputs.token_file }}
+        WEBHOOK_FILE: ${{ steps.build-payload.outputs.webhook_file }}
+      run: rm -f "${TOKEN_FILE:-}" "${WEBHOOK_FILE:-}"
 
 outputs:
   ts:
-    description: "Slack message timestamp - use this for slack_ts in update mode to create thread updates"
-    value: ${{ steps.slack-message.outputs.ts }}
+    description: "Slack message timestamp — pass as slack_ts to the 'update' step."
+    value: ${{ steps.slack-token.outputs.ts || steps.slack-webhook.outputs.ts }}
   start_timestamp:
-    description: "Workflow start timestamp - use this for start_time in update mode to calculate duration"
+    description: "Workflow start timestamp — pass as start_time to the 'update' step."
     value: ${{ steps.auto-meta.outputs.start_timestamp }}
