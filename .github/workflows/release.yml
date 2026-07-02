@@ -1,0 +1,136 @@
+name: Release
+
+# Manually triggered. Cuts a release from `main`: moves the CHANGELOG's
+# [Unreleased] section under a new version heading, commits that, tags it,
+# moves the floating major tag (e.g. v1) to point at it, and publishes a
+# GitHub Release with that changelog section as the notes.
+#
+# What this does NOT do: decide whether a change is PATCH/MINOR/MAJOR (see
+# VERSIONING.md — that's a judgment call) or sign the tag/commit (the runner
+# has no signing key; tags created here are unsigned, unlike ones made
+# locally with `git tag -a -s`/SSH signing configured on your machine).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 1.1.1 (a leading 'v' is fine too). See VERSIONING.md for PATCH/MINOR/MAJOR."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Refuse to run on anything but main
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.ref_name }}" != "main" ]]; then
+            echo "::error::This workflow releases from main only (was triggered on '${{ github.ref_name }}')."
+            exit 1
+          fi
+
+      - name: Validate and normalize version
+        id: ver
+        run: |
+          set -euo pipefail
+          RAW="${{ inputs.version }}"
+          VERSION="${RAW#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like X.Y.Z (got '${RAW}')."
+            exit 1
+          fi
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag v${VERSION} already exists — this workflow won't overwrite an existing release. Pick a new version."
+            exit 1
+          fi
+          MAJOR="${VERSION%%.*}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "major=${MAJOR}" >> "$GITHUB_OUTPUT"
+
+      - name: Move [Unreleased] to the new version heading in CHANGELOG.md
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          RELEASE_DATE="$(date -u +%Y-%m-%d)"
+
+          if ! grep -q '^## \[Unreleased\]' CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no [Unreleased] section to release."
+            exit 1
+          fi
+
+          UNRELEASED_BODY="$(awk '
+            /^## \[Unreleased\]/ { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md)"
+          if [[ -z "$(echo "$UNRELEASED_BODY" | tr -d '[:space:]')" ]]; then
+            echo "::error::[Unreleased] section is empty — add changelog entries before releasing."
+            exit 1
+          fi
+
+          # Rename the existing [Unreleased] heading to the new version heading,
+          # and insert a fresh, empty [Unreleased] placeholder above it so future
+          # changes have somewhere to land.
+          awk -v ver="$VERSION" -v date="$RELEASE_DATE" '
+            /^## \[Unreleased\]/ && !done {
+              print "## [Unreleased]"
+              print ""
+              print "## [" ver "] — " date
+              done=1
+              next
+            }
+            { print }
+          ' CHANGELOG.md > CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+
+          # Extract just the new version's section as the release notes body.
+          VER_ESCAPED="$(printf '%s' "$VERSION" | sed 's/\./\\./g')"
+          awk -v ver_pat="$VER_ESCAPED" '
+            BEGIN { capture=0 }
+            $0 ~ ("^## \\[" ver_pat "\\]") { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > /tmp/release_notes.md
+          sed -i -e '/./,$!d' /tmp/release_notes.md
+
+      - name: Commit CHANGELOG.md
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore: release v${{ steps.ver.outputs.version }}"
+          git push origin HEAD:main
+
+      - name: Tag and move the major version tag
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          MAJOR="${{ steps.ver.outputs.major }}"
+          git tag -a "v${VERSION}" -F /tmp/release_notes.md
+          git tag -f -a "v${MAJOR}" -m "v${MAJOR} -> v${VERSION}"
+          git push origin "v${VERSION}"
+          git push origin "v${MAJOR}" --force
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "v${{ steps.ver.outputs.version }}" \
+            --title "v${{ steps.ver.outputs.version }}" \
+            --notes-file /tmp/release_notes.md \
+            --latest
