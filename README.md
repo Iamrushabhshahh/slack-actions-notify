@@ -2,6 +2,7 @@
 
 [![GitHub marketplace](https://img.shields.io/badge/marketplace-slack--actions--notify-blue?logo=github)](https://github.com/marketplace/actions/slack-actions-notify)
 [![GitHub release](https://img.shields.io/github/v/release/Iamrushabhshahh/slack-actions-notify)](https://github.com/Iamrushabhshahh/slack-actions-notify/releases)
+[![Lint](https://github.com/Iamrushabhshahh/slack-actions-notify/actions/workflows/lint.yml/badge.svg)](https://github.com/Iamrushabhshahh/slack-actions-notify/actions/workflows/lint.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A GitHub Action for Slack notifications that does the one thing most others don't — it edits the same message instead of spamming a new one. Post a "workflow started" message, then update it in-place when the workflow finishes with status, duration, and a link back to the run.
@@ -283,12 +284,13 @@ Your bot token needs the `chat:write` scope at minimum. Reinstall the app to you
 Issues and PRs welcome. A few things that make review faster:
 
 - This is a single composite `action.yaml` — no build step, no `dist/` to keep in sync. Edit the file directly.
-- Test against a real Slack workspace before opening a PR; there's no automated test suite (see [Known limitations](#known-limitations)).
+- CI (see the badge above) runs schema validation and shellcheck on every PR — make sure it's green.
+- Test against a real Slack workspace before opening a PR; there's no automated *functional* test suite (see [Known limitations](#known-limitations)).
 - Follow [VERSIONING.md](VERSIONING.md) for how a change should be versioned, and add an entry to [CHANGELOG.md](CHANGELOG.md).
 
 ### Known limitations
 
-- No automated tests — changes are verified by running them against a real workflow. If you're comfortable setting up a CI job that exercises this against a Slack sandbox workspace, that'd be a welcome contribution.
+- No automated *functional* tests — CI validates the `action.yaml` schema and shellchecks every embedded script, but nothing actually invokes the action against a real Slack workspace end-to-end. Changes are still manually verified that way before a release. If you're comfortable setting up a CI job that exercises this against a Slack sandbox workspace, that'd be a welcome contribution.
 - Uses Slack's legacy `attachments` format rather than Block Kit — simpler to generate from bash/jq, at the cost of some newer Slack formatting features.
 - `errors: false` + capped retries is an opinionated default (see [How failures are handled](#how-failures-are-handled)); there's currently no input to opt back into "fail my build if Slack is down" for teams that want that instead.
 

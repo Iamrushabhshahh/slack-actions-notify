@@ -1,0 +1,64 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  schema-validate:
+    name: Validate action.yaml schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install action-validator
+        run: npm install -g @action-validator/cli @action-validator/core
+      - name: Validate against the official action metadata schema
+        run: action-validator action.yaml
+
+  shellcheck:
+    name: "Shellcheck embedded run: scripts"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PyYAML
+        run: pip install --quiet --break-system-packages pyyaml
+      - name: "Extract each run: block and shellcheck it"
+        run: |
+          cat > /tmp/shellcheck_composite.py << 'PYEOF'
+          import yaml, subprocess, sys, json
+
+          with open("action.yaml") as f:
+              data = yaml.safe_load(f)
+
+          steps = data["runs"]["steps"]
+          had_blocking = False
+
+          for i, step in enumerate(steps):
+              if "run" not in step:
+                  continue
+              name = step.get("name", "step-" + str(i))
+              script = step["run"]
+              result = subprocess.run(
+                  ["shellcheck", "-s", "bash", "-f", "json", "-"],
+                  input=script, capture_output=True, text=True,
+              )
+              findings = json.loads(result.stdout) if result.stdout.strip() else []
+              blocking = [f for f in findings if f["level"] in ("error", "warning")]
+              nits = [f for f in findings if f["level"] not in ("error", "warning")]
+
+              print("--- {} : {} blocking, {} style/info ---".format(name, len(blocking), len(nits)))
+              for f in findings:
+                  print("  [{}] line {}: {} (SC{})".format(f["level"], f["line"], f["message"], f["code"]))
+
+              if blocking:
+                  had_blocking = True
+
+          print()
+          if had_blocking:
+              print("RESULT: FAIL - one or more run: blocks have shellcheck error/warning findings")
+              sys.exit(1)
+          print("RESULT: PASS")
+          PYEOF
+          python3 /tmp/shellcheck_composite.py

@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [VERSIONING.md](VERSIONING.md).
 
+## [Unreleased]
+
+### Added
+
+- CI (`.github/workflows/lint.yml`): every push to `main` and every PR now runs
+  schema validation (`action-validator`, against the official action metadata
+  schema) and shellcheck across every embedded `run:` script, gated on
+  error/warning-level findings only (style-level nits are reported but don't
+  block). This repo previously had no CI of its own at all.
+
+### Fixed
+
+- Two shellcheck style findings (SC2129) in the "Auto-generate metadata" step,
+  cleaned up while adding the linter above. No behavior change.
+
 ## [1.1.0] — 2026-07-02
 
 ### Fixed
