@@ -10,9 +10,23 @@ Also works as a simple one-shot notifier if you don't need threading.
 
 See [CHANGELOG.md](CHANGELOG.md) for release history and [VERSIONING.md](VERSIONING.md) for the versioning policy.
 
+## Contents
+
+- [Why this instead of the alternatives?](#why-this-instead-of-the-alternatives)
+- [How the threading works](#how-the-threading-works)
+- [Setup](#setup)
+- [Quickstart](#quickstart)
+- [Inputs](#inputs)
+- [Outputs](#outputs)
+- [How failures are handled](#how-failures-are-handled)
+- [Troubleshooting](#troubleshooting)
+- [More examples](#more-examples)
+- [Contributing](#contributing)
+- [License](#license)
+
 ---
 
-## Why this instead of \[other Slack action\]?
+## Why this instead of the alternatives?
 
 | | slack-actions-notify | Raw `slackapi/slack-github-action` | Typical one-shot notifiers (`rtCamp/action-slack-notify`, `8398a7/action-slack`) |
 |---|---|---|---|
@@ -36,6 +50,25 @@ Most Slack notify actions post two separate messages (start + result). This one 
    Duration: 2m 14s
    Started: 10:32 16-06-2026
 ```
+
+---
+
+## Setup
+
+**Slack side:**
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App → From Scratch
+2. Under *OAuth & Permissions*, add `chat:write` (and `chat:write.public` if you want to post to public channels without the bot being a member)
+3. Install to workspace, copy the Bot User OAuth Token (`xoxb-…`)
+4. Get your channel ID: open Slack in a browser, go to the channel, it's the last part of the URL
+
+**GitHub side:**
+
+Add to your repo secrets (*Settings → Secrets and variables → Actions*):
+- `SLACK_BOT_TOKEN`
+- `SLACK_CHANNEL_ID`
+
+Prefer a webhook instead of a bot token? Skip straight to [Quickstart](#quickstart) — webhooks need nothing beyond the URL itself, just note they don't support threading (see [Inputs](#inputs)).
 
 ---
 
@@ -189,24 +222,7 @@ Your bot token needs the `chat:write` scope at minimum. Reinstall the app to you
 
 ---
 
-## Setup
-
-**Slack side:**
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App → From Scratch
-2. Under *OAuth & Permissions*, add `chat:write` (and `chat:write.public` if you want to post to public channels without the bot being a member)
-3. Install to workspace, copy the Bot User OAuth Token (`xoxb-…`)
-4. Get your channel ID: open Slack in a browser, go to the channel, it's the last part of the URL
-
-**GitHub side:**
-
-Add to your repo secrets (*Settings → Secrets and variables → Actions*):
-- `SLACK_BOT_TOKEN`
-- `SLACK_CHANNEL_ID`
-
----
-
-## A few examples
+## More examples
 
 **Alert on failure with @here mention:**
 
