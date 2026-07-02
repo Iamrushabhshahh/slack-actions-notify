@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-07-02
+
 ### Added
 
 - CI (`.github/workflows/lint.yml`): every push to `main` and every PR now runs
